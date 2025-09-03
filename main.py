@@ -48,6 +48,7 @@ app.add_middleware(
 # Default template
 DEFAULT_TEMPLATE = """
 <!doctype html>
+<!--SIZE: 970x250-->
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -148,7 +149,7 @@ DEFAULT_TEMPLATE = """
 <body style="background:transparent; margin:0; padding:0;">
 
   <!-- Root: change class to one of the size presets -->
-  <div class="ad size-300x250" role="region" aria-label="Advertisement">
+  <div class="ad size-970x250" role="region" aria-label="Advertisement">
 
     <!-- Decorative blobs -->
     <div class="blob a" aria-hidden="true"></div>
@@ -301,10 +302,10 @@ def clean_html_output(html_content):
     return cleaned_html
 
 def extract_dimensions_from_template(template):
-    """Extract width and height from HTML template size classes"""
+    """Extract width and height from HTML template size comments"""
     
-    # Look for size classes like size-300x250, size-728x90, etc.
-    size_pattern = r'size-(\d+)x(\d+)'
+    # Look for size comments like <!--SIZE: 970x250-->
+    size_pattern = r'<!--SIZE:\s*(\d+)x(\d+)-->'
     match = re.search(size_pattern, template)
     
     if match:
@@ -312,7 +313,16 @@ def extract_dimensions_from_template(template):
         height = int(match.group(2))
         return width, height
     
-    # Default dimensions if no size class found
+    # Fallback: Look for size classes like size-300x250, size-728x90, etc.
+    size_pattern_fallback = r'size-(\d+)x(\d+)'
+    match_fallback = re.search(size_pattern_fallback, template)
+    
+    if match_fallback:
+        width = int(match_fallback.group(1))
+        height = int(match_fallback.group(2))
+        return width, height
+    
+    # Default dimensions if no size information found
     return 1200, 628
 
 def generate_fallback_html(template, prompt):
@@ -351,19 +361,39 @@ async def call_gemini(template, prompt):
         await asyncio.sleep(sleep_time)
     
     api_prompt = (
-        "You are a professional HTML email/banner creative generator. "
-        "Only change what user asks for in the prompt unless you have to update"
-        "Given this HTML template and the provided creative brief, generate a complete HTML banner ad. "
-        "As per the current prompt only, update template"
-        "You can add any tag or remove is user specified. For example, if user says to add a logo, add it."
-        "For image url, check if it is valid and if not, if user give url add it directly"
-        "Images object type should always be 'contain' no matter what user asks for"
-        "Return ONLY the completed HTML, no explanation.\n"
-        f"Template:\n{template}\n"
-        f"Creative Brief:\n{prompt}\n"
+        # "You are a professional HTML email/banner creative generator. "
+        # "DO NOT REMOVE ANY COMMENT OR SIZE COMMENT"
+        # "IF USER ASKS TO RESIZE OR CHANGE THE POSITIION OF THE ELEMENTS; CHANGE THE POSITION OF THE ELEMENTS ACCORDING TO THE SIZE OF THE TEMPLATE"
+        # "IF YOU THINK THERE IS EMPTY SPACE; FILL IT WITH SOMETHING; OF REQUIRED"
+        # "Only change what user asks for in the prompt unless you have to update"
+        # "Given this HTML template and the provided creative brief, generate a complete HTML banner ad. "
+        # "As per the current prompt only, update template"
+        # "You can add any tag or remove is user specified. For example, if user says to add a logo, add it."
+        # "For image url, check if it is valid and if not, if user give url add it directly"
+        # "Images object type should always be 'contain' no matter what user asks for"
+        # "IF USER ASKS FOR REDO OR GIVE ME ANOTHER DESIGN; THINK AND BASED ON THE SCENARIO WRITE CODE AND GIVE BACK THAT CODE; but keep the content same and use modern ui design; and completely chanhe the design completely; always instead of images use placeholder; and keep the size of the template same and fit every element according to the size of the template"
+        # "Return ONLY the completed HTML, no explanation.\n"
+        # f"Template:\n{template}\n"
+        # f"Creative Brief:\n{prompt}\n"
+         "You are a professional HTML email/banner creative generator. "
+    "Follow these rules strictly: "
+    "- DO NOT remove any comment or size comment. "
+    "- no animation no effects no hover effects no transitions"
+    "- ONLY do exactly what the user instructs. "
+    "- If the user asks for resizing or repositioning, adjust elements only according to the specified template size. "
+    "- If there is unavoidable empty space, fill it with minimal appropriate design elements (background color, pattern, or spacing). "
+    "- Do not add or remove tags unless the user explicitly tells you. "
+    "- Use the exact image URLs provided, without validation. "
+    "- All images must use object-fit: contain. "
+    "- If the user asks for a new design or redo, completely change the layout with a modern UI, "
+    "but keep the same size and content. Use placeholder images for redesigns. "
+    "- Always make elements fit the given size proportionally. "
+    "- Return ONLY the final HTML code. Do not add explanations, notes, or extra text.\n\n"
+    f"Template:\n{template}\n"
+    f"Creative Brief:\n{prompt}\n"
     )
 
-    url = "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent"
+    url = "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent"
     headers = {"Content-Type": "application/json"}
     payload = {
         "contents": [
