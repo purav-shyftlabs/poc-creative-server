@@ -11,6 +11,12 @@ from playwright.async_api import async_playwright
 import re
 from dotenv import load_dotenv
 load_dotenv()
+from typing import Generator, List, Optional
+from datetime import datetime
+
+# Database (SQLAlchemy)
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -46,186 +52,7 @@ app.add_middleware(
 
 # Default template
 DEFAULT_TEMPLATE = """
-<!doctype html>
-<!--SIZE: 970x250-->
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pure CSS HTML5 Ad Creative</title>
-  <!--
-    Pure CSS single-file ad template
-    - No frameworks, no external CSS (except optional image assets)
-    - Change root class to .size-300x250, .size-728x90, etc.
-    - Replace placeholders (logo SVG, product SVG/img, copy).
-    - Set window.clickTag (or edit href on the <a class="click">) when served by ad server.
-  -->
-  <style>
-    :root{
-      --brand:#4f46e5;
-      --accent:#06b6d4;
-      --ink:#0b1021;
-      --muted:#475569;
-      --bg:#f8fafc;
-      --cta-color:#ffffff;
-      --radius:14px;
-      --shadow: 0 8px 24px rgba(2,6,23,0.18);
-      --w:300px; --h:250px; /* default */
-      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
-    }
-
-    /* Size presets */
-    .size-300x250 { --w:300px; --h:250px; }
-    .size-336x280 { --w:336px; --h:280px; }
-    .size-728x90  { --w:728px; --h:90px;  }
-    .size-320x50  { --w:320px; --h:50px;  }
-    .size-160x600 { --w:160px; --h:600px; }
-    .size-300x600 { --w:300px; --h:600px; }
-    .size-970x250 { --w:970px; --h:250px; }
-
-    /* Ad canvas */
-    .ad{
-      box-sizing:border-box;
-      width:var(--w); height:var(--h);
-      border-radius:var(--radius);
-      overflow:hidden;
-      position:relative;
-      background: linear-gradient(180deg,#ffffff 0%, #f5f7fb 100%);
-      box-shadow:var(--shadow);
-      color:var(--ink);
-      -webkit-font-smoothing:antialiased;
-      -moz-osx-font-smoothing:grayscale;
-    }
-
-    /* Decorative blobs */
-    .blob{
-      position:absolute; border-radius:50%; filter:blur(18px); opacity:.28; pointer-events:none;
-    }
-    .blob.a{ width:160px; height:160px; right:-40px; top:-40px; background:linear-gradient(135deg,var(--accent),transparent);} 
-    .blob.b{ width:140px; height:140px; left:-40px; bottom:-40px; background:linear-gradient(135deg,var(--brand),transparent);} 
-
-    /* Layout grid */
-    .content{position:absolute; inset:0; display:grid; grid-template-rows:auto 1fr auto; gap:8px; padding:14px;}
-
-    .top{display:flex; align-items:center; gap:8px;}
-    .logo{width:22px; height:22px; border-radius:6px; display:grid; place-items:center; background:linear-gradient(135deg,var(--brand),var(--accent)); box-shadow:0 2px 8px rgba(79,70,229,0.35); flex:0 0 22px;}
-    .brand{font-size:11px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.02em}
-    .badge{margin-left:auto; font-size:11px; padding:3px 8px; border-radius:999px; background:rgba(79,70,229,.12); color:#4338ca; font-weight:600}
-
-    .body{display:grid; grid-template-columns:1fr auto; align-items:center; gap:10px}
-    .headline{margin:0; font-weight:800; font-size:20px; line-height:1.05}
-    .sub{margin:6px 0 0; font-size:12px; color:var(--muted)}
-
-    .product{width:110px; height:110px; border-radius:16px; background:white; box-shadow:0 8px 24px rgba(2,6,23,.18); overflow:hidden; display:flex; align-items:center; justify-content:center; transform:translateZ(0);}
-
-    .cta{display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:999px; background:linear-gradient(135deg,var(--brand),var(--accent)); color:var(--cta-color); font-weight:700; text-decoration:none; border:0; cursor:pointer; box-shadow:0 6px 18px rgba(6,182,212,.35); transition:transform .18s ease, box-shadow .18s ease}
-    .cta:hover{transform:translateY(-2px); box-shadow:0 10px 24px rgba(6,182,212,.45)}
-    .cta:focus{outline:3px solid rgba(14,165,233,.18); outline-offset:3px}
-
-    .footer{display:flex; align-items:center; gap:8px; font-size:11px; color:var(--muted)}
-
-    /* Small banner tweeks */
-    .size-320x50 .product{display:none}
-    .size-320x50 .headline{font-size:14px}
-    .size-728x90 .product{width:86px; height:86px}
-
-    /* Animations */
-    @keyframes float{0%{transform:translateY(0)}50%{transform:translateY(-6px)}100%{transform:translateY(0)}}
-    .product{animation:float 6s ease-in-out infinite}
-
-    /* Clickable overlay (full creative clickable) */
-    .click{position:absolute; inset:0; z-index:40; text-indent:-9999px; overflow:hidden}
-
-    /* Accessibility helpers */
-    .sr-only{position:absolute!important;height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap}
-
-    /* Responsive typography inside different canvas sizes using relative units */
-    .ad .headline{font-size:calc(12px + (22 - 12) * ((var(--w) - 160px) / (970 - 160)));}
-    .ad .sub{font-size:calc(10px + (12 - 10) * ((var(--w) - 160px) / (970 - 160)))}
-
-  </style>
-</head>
-<body style="background:transparent; margin:0; padding:0;">
-
-  <!-- Root: change class to one of the size presets -->
-  <div class="ad size-970x250" role="region" aria-label="Advertisement">
-
-    <!-- Decorative blobs -->
-    <div class="blob a" aria-hidden="true"></div>
-    <div class="blob b" aria-hidden="true"></div>
-
-    <div class="content">
-      <!-- Top bar -->
-      <div class="top">
-        <div class="logo" aria-hidden="true">
-          <!-- simple svg mark -->
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2v6M12 16v6M2 12h6M16 12h6M5 5l4 4M15 15l4 4M5 19l4-4M15 9l4-4"/>
-          </svg>
-        </div>
-        <div class="brand">Your Brand</div>
-        <div class="badge">New</div>
-      </div>
-
-      <!-- Body -->
-      <div class="body">
-        <div>
-          <h1 class="headline">Level up your workflow</h1>
-          <p class="sub">Ship faster with tools designed for speed, clarity, and delight.</p>
-          <div style="margin-top:10px;">
-            <a class="cta" href="#" role="button" aria-label="Learn more">Learn more
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:6px"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-            </a>
-          </div>
-        </div>
-
-        <div class="product" aria-hidden="true">
-          <!-- Replace with an <img src="..." alt="..."> or inline asset if desired -->
-          <svg viewBox="0 0 120 120" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Product preview">
-            <defs>
-              <linearGradient id="g1" x1="0" x2="1" y1="0" y2="1">
-                <stop offset="0%" stop-color="#818cf8"/>
-                <stop offset="100%" stop-color="#06b6d4"/>
-              </linearGradient>
-            </defs>
-            <rect x="10" y="22" width="100" height="76" rx="10" fill="url(#g1)" opacity=".18"/>
-            <rect x="16" y="28" width="88" height="18" rx="6" fill="#0f172a" opacity=".12"/>
-            <rect x="16" y="52" width="72" height="8" rx="4" fill="#0f172a" opacity=".08"/>
-            <rect x="16" y="64" width="88" height="8" rx="4" fill="#0f172a" opacity=".08"/>
-            <rect x="16" y="76" width="64" height="8" rx="4" fill="#0f172a" opacity=".08"/>
-          </svg>
-        </div>
-      </div>
-
-      <!-- Footer -->
-      <div class="footer">
-        <div style="display:flex;align-items:center;gap:6px">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
-          <div style="font-weight:600">4.8</div>
-          <div>(2k+)</div>
-        </div>
-        <div style="margin-left:auto;font-size:11px;color:var(--muted)">* Terms apply</div>
-      </div>
-    </div>
-
-    <!-- Full clickable layer. Use window.clickTag when served by ad server. -->
-    <a class="click" href="#" >Open landing page</a>
-  </div>
-
-  <script>
-    // Click handler supports common ad clickTag pattern.
-
-    // Impression beacon helper (set window.impressionUrl before load to use)
-    (function fireImpression(){
-      var url = window.impressionUrl;
-      if(!url) return;
-      var img = new Image(); img.src = url + (url.indexOf('?')>-1?'&':'?') + 't=' + Date.now();
-    })();
-
-  </script>
-</body>
-</html>
-
+'
 
 """
 
@@ -310,6 +137,101 @@ def extract_dimensions_from_template(template):
     
     # Default dimensions if no size information found
     return 1200, 628
+
+
+############################################
+# Database setup (PostgreSQL via SQLAlchemy)
+############################################
+
+# DATABASE_URL should be provided like:
+# postgresql+psycopg://USER:PASSWORD@HOST:PORT/DBNAME
+# Fallback to local sqlite for dev if not provided
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
+
+connect_args = {}
+if DATABASE_URL.startswith("sqlite"):
+    connect_args = {"check_same_thread": False}
+
+engine = create_engine(DATABASE_URL, echo=False, future=True, connect_args=connect_args)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
+Base = declarative_base()
+
+
+class Template(Base):
+    __tablename__ = "templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    platform = Column(String(50), nullable=True, index=True)
+    size_name = Column(String(50), nullable=True)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    html = Column(Text, nullable=False)
+    is_default = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+def get_db() -> Generator[Session, None, None]:
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def serialize_template(t: Template) -> dict:
+    return {
+        "id": t.id,
+        "name": t.name,
+        "platform": t.platform,
+        "size_name": t.size_name,
+        "width": t.width,
+        "height": t.height,
+        "is_default": t.is_default,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "html": t.html,
+    }
+
+
+@app.on_event("startup")
+async def on_startup():
+    # Create tables
+    Base.metadata.create_all(bind=engine)
+
+    # Seed default template if table is empty or no default exists
+    db = SessionLocal()
+    try:
+        has_any = db.query(Template).first()
+        if not has_any:
+            width, height = extract_dimensions_from_template(DEFAULT_TEMPLATE)
+            default_row = Template(
+                name=f"Default {width}x{height}",
+                platform="Generic",
+                size_name=f"{width}x{height}",
+                width=width,
+                height=height,
+                html=DEFAULT_TEMPLATE,
+                is_default=True,
+            )
+            db.add(default_row)
+            db.commit()
+        else:
+            default_exists = db.query(Template).filter(Template.is_default == True).first()
+            if not default_exists:
+                width, height = extract_dimensions_from_template(DEFAULT_TEMPLATE)
+                default_row = Template(
+                    name=f"Default {width}x{height}",
+                    platform="Generic",
+                    size_name=f"{width}x{height}",
+                    width=width,
+                    height=height,
+                    html=DEFAULT_TEMPLATE,
+                    is_default=True,
+                )
+                db.add(default_row)
+                db.commit()
+    finally:
+        db.close()
 
 
 async def call_gemini(template, prompt):
@@ -700,15 +622,39 @@ async def get_template_dimensions(template: str = DEFAULT_TEMPLATE):
 
 @app.get("/template/default")
 async def get_default_template():
-    """Get the default template as JSON"""
-    return {
-        "template": DEFAULT_TEMPLATE,
-        "variables": {
-            "headline": "Introducing the Future of Creative Ads!",
-            "product": "Gemini-powered Automation, Now Live",
-            "cta": "Try Now"
+    """Get the default template from DB as JSON"""
+    db = SessionLocal()
+    try:
+        row = db.query(Template).filter(Template.is_default == True).first()
+        if not row:
+            row = db.query(Template).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="No templates found")
+        return {
+            "template": row.html,
+            "meta": {
+                "id": row.id,
+                "name": row.name,
+                "platform": row.platform,
+                "size_name": row.size_name,
+                "width": row.width,
+                "height": row.height,
+                "is_default": row.is_default,
+            },
         }
-    }
+    finally:
+        db.close()
+
+
+@app.get("/templates")
+async def list_templates():
+    """Return all templates from the database"""
+    db = SessionLocal()
+    try:
+        rows: List[Template] = db.query(Template).order_by(Template.created_at.desc()).all()
+        return {"templates": [serialize_template(t) for t in rows]}
+    finally:
+        db.close()
 
 
 @app.get("/health")
