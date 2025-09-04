@@ -173,7 +173,7 @@ DEFAULT_TEMPLATE = """
           <h1 class="headline">Level up your workflow</h1>
           <p class="sub">Ship faster with tools designed for speed, clarity, and delight.</p>
           <div style="margin-top:10px;">
-            <a class="cta" href="#" onclick="handleClick(event)" role="button" aria-label="Learn more">Learn more
+            <a class="cta" href="#" role="button" aria-label="Learn more">Learn more
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:6px"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             </a>
           </div>
@@ -209,17 +209,11 @@ DEFAULT_TEMPLATE = """
     </div>
 
     <!-- Full clickable layer. Use window.clickTag when served by ad server. -->
-    <a class="click" href="#" onclick="handleClick(event)">Open landing page</a>
+    <a class="click" href="#" >Open landing page</a>
   </div>
 
   <script>
     // Click handler supports common ad clickTag pattern.
-    function handleClick(e){
-      e.preventDefault();
-      var href = window.clickTag || e.currentTarget.getAttribute('href') || '#';
-      var target = '_blank';
-      try{ window.open(href, target); } catch(err){ location.href = href; }
-    }
 
     // Impression beacon helper (set window.impressionUrl before load to use)
     (function fireImpression(){
