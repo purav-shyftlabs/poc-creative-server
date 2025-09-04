@@ -1,7 +1,7 @@
 import os
 import httpx
 from fastapi import FastAPI, Form, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import tempfile
 import asyncio
@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Configuration
-ENABLE_FALLBACK = False  # Set to False to disable fallback HTML generation
 MAX_RETRIES = 3  # Maximum number of retries for API calls
 RETRY_DELAY_BASE = 1.0  # Base delay between retries (doubles each time)
 
@@ -236,13 +235,6 @@ DEFAULT_TEMPLATE = """
 
 """
 
-def render_template(template, variables):
-    """Simple template rendering function"""
-    rendered = template
-    for key, value in variables.items():
-        placeholder = "{{" + key + "}}"
-        rendered = rendered.replace(placeholder, str(value))
-    return rendered
 
 def clean_html_output(html_content):
     """Clean HTML output from AI model to remove markdown formatting and ensure clean HTML"""
@@ -325,24 +317,6 @@ def extract_dimensions_from_template(template):
     # Default dimensions if no size information found
     return 1200, 628
 
-def generate_fallback_html(template, prompt):
-    """Generate a fallback HTML when Gemini API is unavailable"""
-    # Simple fallback - just return the template with a note about the prompt
-    fallback_html = template
-    
-    # Add a simple fallback content based on the prompt
-    fallback_html += f"""
-    <div class="p-4 bg-white rounded-lg shadow-soft">
-        <h1 class="text-2xl font-bold text-gray-800 mb-2">Creative Banner</h1>
-        <p class="text-gray-600 mb-4">Generated based on your creative brief</p>
-        <p class="text-sm text-gray-500 mb-4">{prompt[:100]}{'...' if len(prompt) > 100 else ''}</p>
-        <button class="bg-blue-500 hover:bg-blue-600 text-white font-semibold px-4 py-2 rounded">
-            Learn More
-        </button>
-    </div>
-    """
-    
-    return fallback_html
 
 async def call_gemini(template, prompt):
     # Check if API key is available
@@ -361,20 +335,6 @@ async def call_gemini(template, prompt):
         await asyncio.sleep(sleep_time)
     
     api_prompt = (
-        # "You are a professional HTML email/banner creative generator. "
-        # "DO NOT REMOVE ANY COMMENT OR SIZE COMMENT"
-        # "IF USER ASKS TO RESIZE OR CHANGE THE POSITIION OF THE ELEMENTS; CHANGE THE POSITION OF THE ELEMENTS ACCORDING TO THE SIZE OF THE TEMPLATE"
-        # "IF YOU THINK THERE IS EMPTY SPACE; FILL IT WITH SOMETHING; OF REQUIRED"
-        # "Only change what user asks for in the prompt unless you have to update"
-        # "Given this HTML template and the provided creative brief, generate a complete HTML banner ad. "
-        # "As per the current prompt only, update template"
-        # "You can add any tag or remove is user specified. For example, if user says to add a logo, add it."
-        # "For image url, check if it is valid and if not, if user give url add it directly"
-        # "Images object type should always be 'contain' no matter what user asks for"
-        # "IF USER ASKS FOR REDO OR GIVE ME ANOTHER DESIGN; THINK AND BASED ON THE SCENARIO WRITE CODE AND GIVE BACK THAT CODE; but keep the content same and use modern ui design; and completely chanhe the design completely; always instead of images use placeholder; and keep the size of the template same and fit every element according to the size of the template"
-        # "Return ONLY the completed HTML, no explanation.\n"
-        # f"Template:\n{template}\n"
-        # f"Creative Brief:\n{prompt}\n"
          "You are a professional HTML email/banner creative generator. "
     "Follow these rules strictly: "
     "- DO NOT remove any comment or size comment. "
@@ -389,7 +349,7 @@ async def call_gemini(template, prompt):
     "- If the user asks for a new design or redo, completely change the layout with a modern UI, "
     "but keep the same size and content. Use placeholder images for redesigns. "
     "- Always make elements fit the given size proportionally. "
-    "- sometimes user will give wage instruction, you need to think with UI/UX prespective and can change the design. for example, if user says to add a logo, add it. or user says add text under the headline, then check what size of the text will be fit in the space and add it. Think for all the aspects"
+    "- sometimes user will give wage instruction, you need to think with UI/UX prespective and can change the design. for example, if user says to add a logo, add it. or user says add text under the headline, then check what size of the text will be fit in the space and add it. Think for all the asp"
     "- Return ONLY the final HTML code. Do not add explanations, notes, or extra text.\n\n"
     f"Template:\n{template}\n"
     f"Creative Brief:\n{prompt}\n"
@@ -439,9 +399,8 @@ async def call_gemini(template, prompt):
                 await asyncio.sleep(retry_delay)
                 retry_delay *= 2
             else:
-                logger.error("All retries exhausted for timeout. Using fallback HTML generation.")
-                fallback_html = generate_fallback_html(template, prompt)
-                return clean_html_output(fallback_html)
+                logger.error("All retries exhausted for timeout.")
+                raise HTTPException(status_code=408, detail="Request timed out. Please try again.")
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 403:
                 logger.error(f"Gemini API authentication failed: {e}")
@@ -461,9 +420,8 @@ async def call_gemini(template, prompt):
                     await asyncio.sleep(retry_delay)
                     retry_delay *= 2
                 else:
-                    logger.error("All retries exhausted for 503 error. Using fallback HTML generation.")
-                    fallback_html = generate_fallback_html(template, prompt)
-                    return clean_html_output(fallback_html)
+                    logger.error("All retries exhausted for 503 error.")
+                    raise HTTPException(status_code=503, detail="The AI service is temporarily unavailable. Please try again in a few minutes.")
             else:
                 logger.error(f"Gemini API HTTP error: {e}")
                 raise HTTPException(
@@ -476,9 +434,8 @@ async def call_gemini(template, prompt):
                 await asyncio.sleep(retry_delay)
                 retry_delay *= 2
             else:
-                logger.error(f"All retries exhausted. Using fallback HTML generation. Last error: {str(e)}")
-                fallback_html = generate_fallback_html(template, prompt)
-                return clean_html_output(fallback_html)
+                logger.error(f"All retries exhausted. Last error: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Failed to generate content: {str(e)}")
 
 async def html_to_image(html_content, width=None, height=None, scale=2):
     """Convert HTML to image with specified dimensions"""
@@ -515,63 +472,182 @@ async def html_to_image(html_content, width=None, height=None, scale=2):
         await browser.close()
         return tempf.name
 
-@app.get("/")
-async def root():
-    """Root endpoint with default template preview"""
-    sample_variables = {
-        "headline": "Introducing the Future of Creative Ads!",
-        "product": "Gemini-powered Automation, Now Live",
-        "cta": "Try Now"
-    }
+# Available creative sizes
+AVAILABLE_SIZES = {
+    "Facebook": [
+        {"name": "Square", "width": 1080, "height": 1080},
+        {"name": "Story", "width": 1080, "height": 1920},
+        {"name": "Feed", "width": 1200, "height": 628}
+    ],
+    "Instagram": [
+        {"name": "Square", "width": 1080, "height": 1080},
+        {"name": "Story", "width": 1080, "height": 1920}
+    ],
+    "Google": [
+        {"name": "Ad", "width": 125, "height": 125}
+    ]
+}
+
+def generate_base_template(width, height):
+    """Generate a base HTML template with specified dimensions"""
+    return f"""<!doctype html>
+<!--SIZE: {width}x{height}-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Generated Creative</title>
+  <style>
+    :root {{
+      --w: {width}px; 
+      --h: {height}px;
+      --brand: #4f46e5;
+      --accent: #06b6d4;
+      --ink: #0b1021;
+      --muted: #475569;
+      --bg: #f8fafc;
+      --cta-color: #ffffff;
+      --radius: 14px;
+      --shadow: 0 8px 24px rgba(2,6,23,0.18);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }}
+
+    body {{
+      margin: 0;
+      padding: 0;
+      background: transparent;
+    }}
+
+    .creative {{
+      width: var(--w);
+      height: var(--h);
+      background: var(--bg);
+      position: relative;
+      overflow: hidden;
+      box-sizing: border-box;
+    }}
+
+    .content {{
+      position: absolute;
+      inset: 0;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+    }}
+
+    .headline {{
+      font-size: {min(width // 15, 48)}px;
+      font-weight: 800;
+      color: var(--ink);
+      margin: 0 0 16px 0;
+      line-height: 1.2;
+    }}
+
+    .subtitle {{
+      font-size: {min(width // 25, 24)}px;
+      color: var(--muted);
+      margin: 0 0 24px 0;
+      line-height: 1.4;
+    }}
+
+    .cta {{
+      background: linear-gradient(135deg, var(--brand), var(--accent));
+      color: var(--cta-color);
+      padding: 12px 24px;
+      border-radius: var(--radius);
+      text-decoration: none;
+      font-weight: 600;
+      font-size: {min(width // 30, 18)}px;
+      border: none;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+    }}
+
+    .logo {{
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      width: {min(width // 10, 60)}px;
+      height: {min(width // 10, 60)}px;
+      background: linear-gradient(135deg, var(--brand), var(--accent));
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }}
+
+    .logo svg {{
+      width: 60%;
+      height: 60%;
+      fill: white;
+    }}
+  </style>
+</head>
+<body>
+  <div class="creative">
+    <div class="logo">
+      <svg viewBox="0 0 24 24">
+        <path d="M12 2v6M12 16v6M2 12h6M16 12h6M5 5l4 4M15 15l4 4M5 19l4-4M15 9l4-4"/>
+      </svg>
+    </div>
+    <div class="content">
+      <h1 class="headline">Your Headline Here</h1>
+      <p class="subtitle">Your subtitle or description goes here</p>
+      <button class="cta">Call to Action</button>
+    </div>
+  </div>
+</body>
+</html>"""
+
+async def generate_template_from_scratch(prompt, size_name, platform):
+    """Generate a complete template from scratch using AI"""
     
-    rendered_html = render_template(DEFAULT_TEMPLATE, sample_variables)
+    # Find the size dimensions
+    size_config = None
+    for size in AVAILABLE_SIZES.get(platform, []):
+        if size["name"] == size_name:
+            size_config = size
+            break
     
-    full_html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Creative POC - Default Template Preview</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; }}
-            .template-container {{ max-width: 800px; margin: 0 auto; }}
-            .code-block {{ background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0; }}
-            .preview {{ border: 2px solid #ddd; border-radius: 8px; overflow: hidden; }}
-        </style>
-    </head>
-    <body>
-        <div class="template-container">
-            <h1 class="text-3xl font-bold mb-6">Creative POC - Default Template Preview</h1>
-            
-            <h2 class="text-xl font-semibold mb-3">Template Code:</h2>
-            <div class="code-block">
-                <pre><code>{DEFAULT_TEMPLATE}</code></pre>
-            </div>
-            
-            <h2 class="text-xl font-semibold mb-3">Sample Variables:</h2>
-            <div class="code-block">
-                <pre><code>{sample_variables}</code></pre>
-            </div>
-            
-            <h2 class="text-xl font-semibold mb-3">Rendered Output:</h2>
-            <div class="preview">
-                {rendered_html}
-            </div>
-            
-            <div class="mt-8 p-4 bg-blue-50 rounded-lg">
-                <h3 class="font-semibold mb-2">API Endpoints:</h3>
-                <ul class="list-disc list-inside space-y-1">
-                    <li><strong>GET /</strong> - This preview page</li>
-                    <li><strong>POST /generate-image/</strong> - Generate image from template and variables</li>
-                    <li><strong>GET /preview/</strong> - Preview template with custom variables</li>
-                </ul>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
+    if not size_config:
+        raise HTTPException(status_code=400, detail=f"Invalid size '{size_name}' for platform '{platform}'")
     
-    return HTMLResponse(content=full_html)
+    width, height = size_config["width"], size_config["height"]
+    
+    # Generate base template
+    base_template = generate_base_template(width, height)
+    
+    # Create AI prompt for template generation
+    ai_prompt = f"""You are a professional creative designer. Create a complete HTML banner ad with the following requirements:
+
+Platform: {platform}
+Size: {width}x{height} pixels
+Creative Brief: {prompt}
+
+Requirements:
+- Create a modern, visually appealing design
+- Use the exact dimensions {width}x{height}
+- Include appropriate typography that scales with the size
+- Add visual elements like backgrounds, shapes, or patterns
+- Include a compelling headline and call-to-action
+- Use CSS for styling (no external dependencies)
+- Ensure the design is responsive within the given dimensions
+- Make it look professional and engaging
+
+Return ONLY the complete HTML code with embedded CSS. Do not include any explanations or markdown formatting."""
+
+    try:
+        # Call Gemini API to generate the template
+        html = await call_gemini(base_template, ai_prompt)
+        return html
+    except Exception as e:
+        logger.error(f"Error generating template from scratch: {str(e)}")
+        # Return base template if AI generation fails
+        return base_template
+
 
 @app.post("/generate-image/")
 async def generate_image(
@@ -617,16 +693,6 @@ async def generate_image(
                 detail=f"An unexpected error occurred while generating the image. Please try again."
             )
 
-@app.get("/test/clean-html")
-async def test_clean_html(html_content: str = "```html\n<div>Test</div>\n```"):
-    """Test endpoint to verify HTML cleaning functionality"""
-    cleaned = clean_html_output(html_content)
-    return {
-        "original": html_content,
-        "cleaned": cleaned,
-        "removed_markdown": "```html" in html_content or "```" in html_content,
-        "is_valid_html": cleaned.startswith('<') and cleaned.endswith('>')
-    }
 
 @app.get("/template/dimensions")
 async def get_template_dimensions(template: str = DEFAULT_TEMPLATE):
@@ -650,37 +716,6 @@ async def get_default_template():
         }
     }
 
-@app.get("/config")
-async def get_config():
-    """Get current configuration"""
-    return {
-        "enable_fallback": ENABLE_FALLBACK,
-        "max_retries": MAX_RETRIES,
-        "retry_delay_base": RETRY_DELAY_BASE,
-        "rate_limit_interval": min_interval,
-        "api_key_configured": bool(GEMINI_API_KEY)
-    }
-
-@app.post("/config")
-async def update_config(
-    enable_fallback: bool = None,
-    max_retries: int = None,
-    retry_delay_base: float = None,
-    rate_limit_interval: float = None
-):
-    """Update configuration (for debugging/monitoring purposes)"""
-    global ENABLE_FALLBACK, MAX_RETRIES, RETRY_DELAY_BASE, min_interval
-    
-    if enable_fallback is not None:
-        ENABLE_FALLBACK = enable_fallback
-    if max_retries is not None:
-        MAX_RETRIES = max_retries
-    if retry_delay_base is not None:
-        RETRY_DELAY_BASE = retry_delay_base
-    if rate_limit_interval is not None:
-        min_interval = rate_limit_interval
-    
-    return {"message": "Configuration updated", "config": await get_config()}
 
 @app.get("/health")
 async def health_check():
@@ -725,3 +760,39 @@ async def health_check():
     
     details["status"] = status
     return details
+
+@app.get("/sizes")
+async def get_available_sizes():
+    """Get all available creative sizes"""
+    return {"sizes": AVAILABLE_SIZES}
+
+@app.post("/generate-template/")
+async def generate_template(
+    prompt: str = Form(...),
+    platform: str = Form(...),
+    size_name: str = Form(...)
+):
+    """Generate a new template from scratch using AI"""
+    try:
+        # Validate platform and size
+        if platform not in AVAILABLE_SIZES:
+            raise HTTPException(status_code=400, detail=f"Invalid platform. Available platforms: {', '.join(AVAILABLE_SIZES.keys())}")
+        
+        valid_sizes = [size["name"] for size in AVAILABLE_SIZES[platform]]
+        if size_name not in valid_sizes:
+            raise HTTPException(status_code=400, detail=f"Invalid size for {platform}. Available sizes: {', '.join(valid_sizes)}")
+        
+        # Generate template
+        template = await generate_template_from_scratch(prompt, size_name, platform)
+        
+        return {
+            "template": template,
+            "platform": platform,
+            "size": size_name,
+            "dimensions": next(size for size in AVAILABLE_SIZES[platform] if size["name"] == size_name)
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error in generate_template: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate template: {str(e)}")
