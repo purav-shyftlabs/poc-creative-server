@@ -50,11 +50,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Default template
-DEFAULT_TEMPLATE = """
-'
-
-"""
 
 
 def clean_html_output(html_content):
@@ -171,6 +166,18 @@ class Template(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class ChatHistory(Base):
+    __tablename__ = "chat_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(255), nullable=False, index=True)
+    template_id = Column(Integer, nullable=True, index=True)
+    user_message = Column(Text, nullable=False)
+    ai_response = Column(Text, nullable=True)
+    template_html = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:
@@ -193,6 +200,18 @@ def serialize_template(t: Template) -> dict:
     }
 
 
+def serialize_chat_history(ch: ChatHistory) -> dict:
+    return {
+        "id": ch.id,
+        "session_id": ch.session_id,
+        "template_id": ch.template_id,
+        "user_message": ch.user_message,
+        "ai_response": ch.ai_response,
+        "template_html": ch.template_html,
+        "created_at": ch.created_at.isoformat() if ch.created_at else None,
+    }
+
+
 @app.on_event("startup")
 async def on_startup():
     # Create tables
@@ -203,14 +222,16 @@ async def on_startup():
     try:
         has_any = db.query(Template).first()
         if not has_any:
-            width, height = extract_dimensions_from_template(DEFAULT_TEMPLATE)
+            # Create a default template using the base template generator
+            default_template = generate_base_template(1200, 628)
+            width, height = extract_dimensions_from_template(default_template)
             default_row = Template(
                 name=f"Default {width}x{height}",
                 platform="Generic",
                 size_name=f"{width}x{height}",
                 width=width,
                 height=height,
-                html=DEFAULT_TEMPLATE,
+                html=default_template,
                 is_default=True,
             )
             db.add(default_row)
@@ -218,14 +239,16 @@ async def on_startup():
         else:
             default_exists = db.query(Template).filter(Template.is_default == True).first()
             if not default_exists:
-                width, height = extract_dimensions_from_template(DEFAULT_TEMPLATE)
+                # Create a default template using the base template generator
+                default_template = generate_base_template(1200, 628)
+                width, height = extract_dimensions_from_template(default_template)
                 default_row = Template(
                     name=f"Default {width}x{height}",
                     platform="Generic",
                     size_name=f"{width}x{height}",
                     width=width,
                     height=height,
-                    html=DEFAULT_TEMPLATE,
+                    html=default_template,
                     is_default=True,
                 )
                 db.add(default_row)
@@ -611,8 +634,21 @@ async def generate_image(
 
 
 @app.get("/template/dimensions")
-async def get_template_dimensions(template: str = DEFAULT_TEMPLATE):
+async def get_template_dimensions(template: str = None):
     """Get the dimensions of a template"""
+    if template is None:
+        # Get default template from database
+        db = SessionLocal()
+        try:
+            default_template = db.query(Template).filter(Template.is_default == True).first()
+            if not default_template:
+                default_template = db.query(Template).first()
+            if not default_template:
+                raise HTTPException(status_code=404, detail="No templates found in database")
+            template = default_template.html
+        finally:
+            db.close()
+    
     width, height = extract_dimensions_from_template(template)
     return {
         "width": width,
@@ -736,3 +772,137 @@ async def generate_template(
     except Exception as e:
         logger.error(f"Error in generate_template: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to generate template: {str(e)}")
+
+
+# Chat Context Endpoints
+@app.post("/chat/save")
+async def save_chat_message(
+    session_id: str = Form(...),
+    template_id: int = Form(None),
+    user_message: str = Form(...),
+    ai_response: str = Form(None),
+    template_html: str = Form(None)
+):
+    """Save a chat message to the history"""
+    db = SessionLocal()
+    try:
+        chat_entry = ChatHistory(
+            session_id=session_id,
+            template_id=template_id,
+            user_message=user_message,
+            ai_response=ai_response,
+            template_html=template_html
+        )
+        db.add(chat_entry)
+        db.commit()
+        db.refresh(chat_entry)
+        return {"id": chat_entry.id, "message": "Chat message saved successfully"}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error saving chat message: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to save chat message: {str(e)}")
+    finally:
+        db.close()
+
+
+@app.get("/chat/history/{session_id}")
+async def get_chat_history(session_id: str):
+    """Get chat history for a session"""
+    db = SessionLocal()
+    try:
+        chat_history = db.query(ChatHistory).filter(
+            ChatHistory.session_id == session_id
+        ).order_by(ChatHistory.created_at.asc()).all()
+        
+        return {
+            "session_id": session_id,
+            "history": [serialize_chat_history(ch) for ch in chat_history]
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving chat history: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve chat history: {str(e)}")
+    finally:
+        db.close()
+
+
+@app.post("/chat/generate-with-context")
+async def generate_with_chat_context(
+    session_id: str = Form(...),
+    template: str = Form(...),
+    prompt: str = Form(...),
+    template_id: int = Form(None)
+):
+    """Generate template with chat context"""
+    try:
+        # Get chat history for context
+        db = SessionLocal()
+        try:
+            chat_history = db.query(ChatHistory).filter(
+                ChatHistory.session_id == session_id
+            ).order_by(ChatHistory.created_at.desc()).limit(5).all()
+        finally:
+            db.close()
+        
+        # Build context from chat history
+        context_messages = []
+        for ch in reversed(chat_history):  # Reverse to get chronological order
+            if ch.user_message:
+                context_messages.append(f"User: {ch.user_message}")
+            if ch.ai_response:
+                context_messages.append(f"Assistant: {ch.ai_response}")
+        
+        # Create enhanced prompt with context
+        context_text = "\n".join(context_messages) if context_messages else "No previous context."
+        enhanced_prompt = f"""Previous conversation context:
+{context_text}
+
+Current request: {prompt}
+
+Please consider the previous conversation context when making changes to the template."""
+        
+        # Generate with enhanced prompt
+        html = await call_gemini(template, enhanced_prompt)
+        
+        # Save this interaction to chat history
+        db = SessionLocal()
+        try:
+            chat_entry = ChatHistory(
+                session_id=session_id,
+                template_id=template_id,
+                user_message=prompt,
+                ai_response="Template updated successfully",
+                template_html=html
+            )
+            db.add(chat_entry)
+            db.commit()
+        finally:
+            db.close()
+        
+        return {
+            "template": html,
+            "context_used": len(chat_history) > 0,
+            "context_messages": len(chat_history)
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error in generate_with_chat_context: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate with context: {str(e)}")
+
+
+@app.delete("/chat/clear/{session_id}")
+async def clear_chat_history(session_id: str):
+    """Clear chat history for a session"""
+    db = SessionLocal()
+    try:
+        deleted_count = db.query(ChatHistory).filter(
+            ChatHistory.session_id == session_id
+        ).delete()
+        db.commit()
+        return {"message": f"Cleared {deleted_count} chat messages", "session_id": session_id}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error clearing chat history: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear chat history: {str(e)}")
+    finally:
+        db.close()
